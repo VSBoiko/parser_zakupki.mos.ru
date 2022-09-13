@@ -9,11 +9,11 @@ import logging
 
 import requests
 
-# currentdir = os.path.dirname(os.path.realpath(__file__))
-# base_path = os.path.dirname(currentdir)
-# sys.path.append(base_path)
-# sys.path.append('/home/manage_report')
-# from Send_report.Utils import send_to_api
+currentdir = os.path.dirname(os.path.realpath(__file__))
+base_path = os.path.dirname(currentdir)
+sys.path.append(base_path)
+sys.path.append('/home/manage_report')
+from Send_report.Utils import send_to_api
 
 headers = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -67,12 +67,15 @@ def get_orders(json_filepath: str) -> dict:
     count_send = 0
     count_send_error = 0
     for item in json_data["items"]:
-        if item["number"] == "4122001":
+        dont_send = [
+            "4122001"  # test
+        ]
+        if item["number"] in dont_send:
             count += 1
             continue
         elif len(item.get('customers')) == 0:
             print(f"[ORDER MISSED] - order '{item.get('name')}' doesn`t have customers")
-            logger.error(f"Order '{item.get('name')}' doesn`t have customers")
+            logger.error(f"Order doesn`t have customers: '{item.get('name')}'")
             count += 1
             continue
 
@@ -94,16 +97,16 @@ def get_orders(json_filepath: str) -> dict:
 
         item_filename = f"{item['number']}.json"
 
-        if os.path.exists(f"./data/{type}/{item_filename}"):
-            print(f"{iter_info}: [ORDER_ALREADY_SENT] - {item.get('name')} ({item.get('number')})")
-            count += 1
-            continue
+        # if os.path.exists(f"./data/{type}/{item_filename}"):
+        #     print(f"{iter_info}: [ORDER_ALREADY_SENT] - {item.get('name')} ({item.get('number')})")
+        #     count += 1
+        #     continue
 
         item_detail = get_item_detail(item_filename, type, item, id, iter_info)
 
         if item_detail == {} or item_detail.get("httpStatusCode") == 404:
             os.remove(f"./data/{type}/{item_filename}")
-            logger.error(f"Error getting item_detail - {item_url}")
+            logger.error(f"Error getting item_detail: {item_url}")
             count += 1
             continue
 
@@ -114,7 +117,7 @@ def get_orders(json_filepath: str) -> dict:
         if customer == {} or customer.get("httpStatusCode") == 404:
             os.remove(f"./data/customers/{customer_filename}")
             os.remove(f"./data/{type}/{item_filename}")
-            logger.error(f"Error getting customer - {item_url}")
+            logger.error(f"Error getting customer: {item_url}")
             count += 1
             continue
 
@@ -127,13 +130,13 @@ def get_orders(json_filepath: str) -> dict:
             elif type == "tender":
                 order = get_tender(item, item_detail, item_url, customer)
         except Exception as err:
-            logger.error(f"Error getting customer - {item_url}")
+            logger.error(f"Error getting customer: {item_url}")
             logger.error(err)
             # errors.append(f"{iter_info}: [ERROR] - {item.get('number')}: {item_url}")
 
         if order != {}:
             orders.append(order)
-            logger.info(f"Order [{item.get('number')}] {item.get('name')} was added to shipping list")
+            logger.info(f"Order was added to shipping list: [{item.get('number')}] {item.get('name')}")
             print(f"{iter_info}: [ORDER ADDED TO SHIPPING LIST] - {item.get('name')} ({item.get('number')})")
             count_send += 1
         else:
@@ -145,23 +148,34 @@ def get_orders(json_filepath: str) -> dict:
                 'name': 'zakupki.mos.ru',
                 'data': orders
             }
-            # send_to_api(data)
-            logger.info(f"Sent {len(orders)} orders to API")
-            print(f"[SEND ORDERS] - {len(orders)} orders")
-            orders.clear()
+
+            try:
+                send_to_api(data)
+                logger.info(f"Sent {len(orders)} orders to API")
+                print(f"[SEND ORDERS] - {len(orders)} orders")
+                orders.clear()
+            except Exception as err:
+                logger.error(f"Error while sending orders")
+                logger.error(err)
+                print(f"[SEND ORDERS ERROR] - {len(orders)} orders")
 
         count += 1
-        sleep(random.randrange(2, 4))
+        # sleep(random.randrange(2, 4))
 
     if len(orders) > 0:
         data = {
             'name': 'zakupki.mos.ru',
             'data': orders
         }
-        # send_to_api(data)
-        logger.info(f"Sent {len(orders)} orders to API")
-        print(f"[SEND ORDERS] - {len(orders)} orders")
-        orders.clear()
+        try:
+            send_to_api(data)
+            logger.info(f"Sent {len(orders)} orders to API")
+            print(f"[SEND ORDERS] - {len(orders)} orders")
+            orders.clear()
+        except Exception as err:
+            logger.error(f"Error while sending orders")
+            logger.error(err)
+            print(f"[SEND ORDERS ERROR] - {len(orders)} orders")
 
     # with open(f"./result.json", "w") as json_file:
     #     json.dump(orders, json_file, indent=4, ensure_ascii=False)
@@ -175,7 +189,7 @@ def get_orders(json_filepath: str) -> dict:
     }
 
 
-def get_item_detail(filename: str, type: str, item: dict, id:str, iter_info: str) -> dict:
+def get_item_detail(filename: str, type: str, item: dict, id: str, iter_info: str) -> dict:
     if type == "auction":
         detail_url = f"https://zakupki.mos.ru/newapi/api/{type.capitalize()}/Get?{type}Id={id}"
     elif type == "need":
@@ -267,25 +281,39 @@ def get_need(item, detail, item_url, customer):
 
     # customer
     if customer.get("company").get("factAddress"):
+        if "customer" not in result:
+            result.update({"customer": {}})
         result["customer"].update({"factAddress": customer.get("company").get("factAddress")})
 
     if customer.get("company").get("inn"):
+        if "customer" not in result:
+            result.update({"customer": {}})
         result["customer"].update({"inn": customer.get("company").get("inn")})
 
     if customer.get("company").get("kpp"):
+        if "customer" not in result:
+            result.update({"customer": {}})
         result["customer"].update({"kpp": customer.get("company").get("kpp")})
 
     # contactPerson
     if item_contact_name[0]:
+        if "contactPerson" not in result:
+            result.update({"contactPerson": {}})
         result["contactPerson"].update({"lastName": item_contact_name[0]})
 
     if item_contact_name[1]:
+        if "contactPerson" not in result:
+            result.update({"contactPerson": {}})
         result["contactPerson"].update({"firstName": item_contact_name[1]})
 
     if detail.get("contactEmail"):
+        if "contactPerson" not in result:
+            result.update({"contactPerson": {}})
         result["contactPerson"].update({"contactEMail": detail.get("contactEmail")})
 
     if detail.get("contactPhone"):
+        if "contactPerson" not in result:
+            result.update({"contactPerson": {}})
         result["contactPerson"].update({"contactPhone": detail.get("contactPhone")})
 
     return result
@@ -322,12 +350,18 @@ def get_auction(item, detail, item_url, customer) -> dict:
 
     # customer
     if customer.get("company").get("factAddress"):
+        if "customer" not in result:
+            result.update({"customer": {}})
         result["customer"].update({"factAddress": customer.get("company").get("factAddress")})
 
     if customer.get("company").get("inn"):
+        if "customer" not in result:
+            result.update({"customer": {}})
         result["customer"].update({"inn": customer.get("company").get("inn")})
 
     if customer.get("company").get("kpp"):
+        if "customer" not in result:
+            result.update({"customer": {}})
         result["customer"].update({"kpp": customer.get("company").get("kpp")})
 
     return result
@@ -360,25 +394,31 @@ def get_tender(item, detail, item_url, customer):
             "docDescription": "Сведения о процедуре закупки в Единой информационной системе",
             "url": f"https://zakupki.gov.ru/epz/order/notice/ok504/view/common-info.html?regNumber={register_number}"
         },
-        {
-            "docDescription": "Документация в ЕИС",
-            "url": f"https://zakupki.gov.ru/epz/order/notice/ok504/view/documents.html?regNumber={register_number}"
-        },
-        {
-            "docDescription": "Протоколы в ЕИС",
-            "url": f"https://zakupki.gov.ru/epz/order/notice/ok504/view/documents.html?regNumber={register_number}"
-        }],
+            {
+                "docDescription": "Документация в ЕИС",
+                "url": f"https://zakupki.gov.ru/epz/order/notice/ok504/view/documents.html?regNumber={register_number}"
+            },
+            {
+                "docDescription": "Протоколы в ЕИС",
+                "url": f"https://zakupki.gov.ru/epz/order/notice/ok504/view/documents.html?regNumber={register_number}"
+            }],
         "type": 2
     }
 
     # customer
     if customer.get("company").get("factAddress"):
+        if "customer" not in result:
+            result.update({"customer": {}})
         result["customer"].update({"factAddress": customer.get("company").get("factAddress")})
 
     if customer.get("company").get("inn"):
+        if "customer" not in result:
+            result.update({"customer": {}})
         result["customer"].update({"inn": customer.get("company").get("inn")})
 
     if customer.get("company").get("kpp"):
+        if "customer" not in result:
+            result.update({"customer": {}})
         result["customer"].update({"kpp": customer.get("company").get("kpp")})
 
     return result
@@ -405,15 +445,15 @@ if __name__ == "__main__":
     #     # os.remove(f"{data_filepath}")
     #     # logger.info(f"{data_filepath} deleted")
 
-    orders = {}
-    result = {
-        "new_orders": -1,
-        "errors": -1
-    }
     is_created_data_file = True
     if is_created_data_file:
         result = get_orders(data_filepath)
-        os.remove(f"{data_filepath}")
+        # os.remove(f"{data_filepath}")
+    else:
+        result = {
+            "new_orders": -1,
+            "errors": -1
+        }
 
     time_finish = datetime.datetime.now()
     print(f"[SCRIPT FINISH] - {time_finish.strftime('%d.%m.%Y, %H:%M:%S')}")
