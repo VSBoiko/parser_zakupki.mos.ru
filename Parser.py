@@ -19,13 +19,17 @@ class Parser(BaseParser):
                 headers=self._get_headers()
             )
         except requests.exceptions.RequestException as err:
-            self.add_logger_error("Error sending a request to site zakupki.mos")
+            print("[ERROR] Ошибка при запросе на получении списка заказов с сайта zakupki.mos")
+            self.add_logger_error("Ошибка при запросе на получении списка заказов с сайта zakupki.mos")
             self.add_logger_error(err.response.content)
             return False
 
         self._to_sleep()
 
         self.write_json_file(json_filepath, response.json())
+        print(f"[FILE CREATED] Файл {json_filepath} со списком заказов успешно создан")
+        self.add_logger_info(f"Файл {json_filepath} со списком заказов успешно создан")
+
         return True
 
     @staticmethod
@@ -75,7 +79,8 @@ class Parser(BaseParser):
     def add_customer_to_db(self, db: ParserDb, customer_id: str) -> bool:
         db_customer = db.get_customer_by_customer_id(customer_id)
         if db_customer:
-            print(f"[CUSTOMER_ALREADY_EXIST] - ({customer_id})")
+            # print(f"[ALREADY EXIST] Заказчик уже существует в БД - ({customer_id})")
+            # self.add_logger_info(f"Заказчик уже существует в БД - ({customer_id})")
             return False
         else:
             customer_url = self._get_customer_url(customer_id)
@@ -83,7 +88,8 @@ class Parser(BaseParser):
             customer = self.get_customer(customer_api_url)
 
             if customer == {} or customer.get("httpStatusCode") == 404:
-                self.add_logger_error(f"Error getting customer: {customer_api_url}")
+                print(f"[ERROR] Ошибка при получении заказчика: {customer_url}")
+                self.add_logger_error(f"Ошибка при получении заказчика: {customer_url}")
                 return False
             else:
                 db.add_customer(
@@ -91,13 +97,16 @@ class Parser(BaseParser):
                     customer_id=customer_id,
                     customer_data=json.dumps(customer)
                 )
+                print(f"[SUCCESS] Заказчик {customer_id} успешно добавлен в БД")
+                self.add_logger_info(f"Заказчик {customer_id} успешно добавлен в БД")
                 return True
 
     def add_order_to_db(self, db: ParserDb, order_type: str, order_id: str,
                         order_data: dict, customer_id: str) -> bool:
         db_order = db.get_order_by_order_id(order_id)
         if db_order:
-            print(f"[ORDER_ALREADY_EXIST] - ({order_id})")
+            # print(f"[ALREADY EXIST] Заказ уже существует в БД - ({order_id})")
+            # self.add_logger_info(f"Заказ уже существует в БД - ({order_id})")
             return False
         else:
             item_url = self.get_item_url(order_type, order_id)
@@ -105,7 +114,8 @@ class Parser(BaseParser):
             item_detail = self.get_item(item_api_url)
 
             if item_detail == {} or item_detail.get("httpStatusCode") == 404:
-                self.add_logger_error(f"Error getting item_detail: {item_url}")
+                print(f"[ERROR] Ошибка при получении детальной инф-ции о заказе: {item_url}")
+                self.add_logger_error(f"Ошибка при получении детальной инф-ции о заказе: {item_url}")
                 return False
             else:
                 db.add_order(
@@ -116,16 +126,20 @@ class Parser(BaseParser):
                     order_detail=json.dumps(item_detail),
                     customer_id=customer_id
                 )
+                print(f"[SUCCESS] Заказ {order_id} успешно добавлен в БД")
+                self.add_logger_info(f"Заказ {order_id} успешно добавлен в БД")
                 return True
 
     def add_data_to_db(self, json_filepath: str, db: ParserDb):
         data = self.read_json_file(json_filepath)
         count_all_item = data["count"]
         count = 0
+        print("[START] Начало добавления заказов в БД")
         for item in data["items"][0:10]:
             count += 1
             iter_info = f"#{count} / {count_all_item}"
-            print(f"{iter_info}: [START] - {item.get('name')} ({item.get('number')})")
+            print(f"{iter_info}: [ORDER] Заказ ({item.get('number')}) {item.get('name')}")
+            # self.add_logger_info(f"Заказ ({item.get('number')}) {item.get('name')}")
 
             customer_id = item.get('customers')[0].get('id')
             self.add_customer_to_db(db, customer_id)
@@ -134,6 +148,7 @@ class Parser(BaseParser):
             item_id = self.get_item_id(item_type, item)
             if self.check_order(item):
                 self.add_order_to_db(db, item_type, item_id, item, customer_id)
+        print("[FINISH] Конец добавления заказов в БД\n")
 
     def check_order(self, order):
         dont_send = [
@@ -143,8 +158,8 @@ class Parser(BaseParser):
         if order.get("number") in dont_send:
             return False
         elif len(order.get('customers')) == 0:
-            print(f"[ORDER MISSED] - order '{order.get('name')}' doesn`t have customers")
-            self.add_logger_error(f"Order doesn`t have customers: '{order.get('name')}'")
+            print(f"[ERROR] Заказ не имеет заказчика: number = '{order.get('number')}'")
+            self.add_logger_error(f"Заказ не имеет заказчика: number = '{order.get('number')}'")
             return False
 
         return True
@@ -153,12 +168,18 @@ class Parser(BaseParser):
         orders = db.get_unsent_orders()
         count_all_orders = len(orders)
         count, count_send, count_send_error = 0, 0, 0
+        print("[START] Начало отправки заказов по API")
+
+        if count_all_orders == 0:
+            print("[INFO] Новых заказов нет")
+            self.add_logger_info("Новых заказов нет")
+
         for order in orders:
             count += 1
             iter_info = f"#{count} / {count_all_orders}"
 
             order_data = json.loads(order.get("order_data"))
-            print(f"{iter_info}: [START] - {order_data.get('name')} ({order_data.get('number')})")
+            print(f"{iter_info}: [ORDER] Заказ ({order_data.get('number')}) {order_data.get('name')}")
 
             order_type = order.get("order_type")
             customer = db.get_customer_by_customer_id(order.get("customer_id"))
@@ -172,18 +193,25 @@ class Parser(BaseParser):
                     # order = self.formatted_order_tender(order_data, order_detail, order_url, customer)
                     formatted_order = {}
             except Exception as err:
-                self.add_logger_error(f"Error creating order to send: {order.get('url')}")
+                print(f"[ERROR] Ошибка при создании заказа для отправки по API: {order.get('url')}")
+                self.add_logger_error(f"Ошибка при создании заказа для отправки по API: {order.get('url')}")
                 self.add_logger_error(err)
             if formatted_order:
                 if self._send_orders([formatted_order]):
                     db.update_send_on_success(order.get("order_id"))
+                    print(f"[SUCCESS] Заказ успешно отправлен по API: {order.get('url')}")
+                    self.add_logger_info(f"Заказ успешно отправлен по API: {order.get('url')}")
                     count_send += 1
                 else:
+                    print(f"[ERROR] Заказ не отправлен по API: {order.get('url')}")
+                    self.add_logger_error(f"Заказ не отправлен по API: {order.get('url')}")
                     count_send_error += 1
             else:
-                print(f"{iter_info}: {order_type} [ORDER IS EMPTY] - "
-                      f"({order_data.get('number')}) {order_data.get('name')} ")
+                print(f"[EMPTY ORDER] Заказ пустой: {order.get('url')}")
+                self.add_logger_info(f"Заказ пустой: {order.get('url')}")
                 count_send_error += 1
+
+        print("[FINISH] Конец отправки заказов по API\n")
 
         return {
             "new_orders": count_send,
@@ -326,7 +354,7 @@ class Parser(BaseParser):
                 headers=self._get_headers()
             )
         except requests.exceptions.RequestException as err:
-            self.add_logger_error("Error when sending a request to the site zakupki.mos")
+            self.add_logger_error("Ошибка при отправке запроса на получение инф-ции о заказчике")
             self.add_logger_error(err.response.content)
             return {}
 
@@ -341,7 +369,7 @@ class Parser(BaseParser):
                 headers=self._get_headers()
             )
         except requests.exceptions.RequestException as err:
-            self.add_logger_error("Error sending a request to site zakupki.mos")
+            self.add_logger_error("Ошибка при отправке запроса на получение детальной инф-ции о заказе")
             self.add_logger_error(err.response.content)
             return {}
 
@@ -351,9 +379,9 @@ class Parser(BaseParser):
 
     def start(self):
         time_start = datetime.datetime.now()
-        print(f"[SCRIPT START] - {time_start.strftime('%d.%m.%Y, %H:%M:%S')}")
+        print(f"[PARSER] Парсер начал работу в {time_start.strftime('%d.%m.%Y, %H:%M:%S')}")
 
-        self.add_logger_info("Script start")
+        self.add_logger_info("Парсер начал работу")
 
         result = {
             "new_orders": -1,
@@ -363,8 +391,8 @@ class Parser(BaseParser):
         mos_url = "https://old.zakupki.mos.ru/api/Cssp/Purchase/Query?queryDto=%7B%22filter%22%3A%7B%22auctionSpecificFilter%22%3A%7B%22stateIdIn%22%3A%5B19000002%5D%7D%2C%22needSpecificFilter%22%3A%7B%22stateIdIn%22%3A%5B20000002%5D%7D%2C%22tenderSpecificFilter%22%3A%7B%22stateIdIn%22%3A%5B5%5D%7D%7D%2C%22order%22%3A%5B%7B%22field%22%3A%22relevance%22%2C%22desc%22%3Atrue%7D%5D%2C%22withCount%22%3Atrue%2C%22skip%22%3A0%7D"
         data_filepath = "./data.json"
         if os.path.exists(data_filepath):
-            print(f"[ERROR] - {data_filepath} already exist")
-            self.add_logger_error(f"{data_filepath} already exist, new orders doesn`t loaded")
+            print(f"[ERROR] Файл {data_filepath} существует, новые заказы не могут быть загруженыt")
+            self.add_logger_error(f"Файл {data_filepath} существует, новые заказы не могут быть загружены")
             # os.remove(f"{data_filepath}")
             # logger.info(f"{data_filepath} deleted")
         else:
@@ -376,13 +404,17 @@ class Parser(BaseParser):
             self.add_data_to_db(data_filepath, db)
             result = self.send_orders_from_db(db)
             os.remove(f"{data_filepath}")
+            print(f"[INFO] Файл {data_filepath} успешно удален")
+            self.add_logger_info(f"Файл {data_filepath} успешно удален")
 
         time_finish = datetime.datetime.now()
-        print(f"[SCRIPT FINISH] - {time_finish.strftime('%d.%m.%Y, %H:%M:%S')}")
+        print(f"[PARSER] Парсер закончил работу в {time_finish.strftime('%d.%m.%Y, %H:%M:%S')}. "
+              f"{result.get('new_orders')} новых заказов отправлено. "
+              f"{result.get('errors')} заказов с ошибкой.")
 
-        self.add_logger_info(f"Script finish. "
-                             f"{result.get('new_orders')} new orders sent. "
-                             f"{result.get('errors')} orders with errors.")
+        self.add_logger_info(f"Парсер закончил работу. "
+                             f"{result.get('new_orders')} новых заказов отправлено. "
+                             f"{result.get('errors')} заказов с ошибкой.")
 
     @staticmethod
     def _get_document_url(document_id: str) -> str:

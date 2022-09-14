@@ -5,20 +5,20 @@ from BaseDb import BaseDb
 
 
 class ParserDb(BaseDb):
-    def add_customer(self, url: str, customer_id: str, customer_data: str):
+    def add_customer(self, url: str, customer_id: str, customer_data: str) -> bool:
         query = "INSERT INTO " \
                 "customers(url, customer_id, customer_data) " \
                 "VALUES (?, ?, ?)"
-        self.write_data_to_db(query, [(url, customer_id, customer_data)])
+        return self.write_data_to_db(query, [(url, customer_id, customer_data)])
 
     def add_order(self, url: str, order_type: str, order_id: str,
-                  order_data: str, order_detail: str, customer_id: str):
+                  order_data: str, order_detail: str, customer_id: str) -> bool:
         query = "INSERT INTO " \
                 "orders(url, order_type, order_id, order_data, order_detail, " \
                 "customer_id) " \
                 "VALUES (?, ?, ?, ?, ?, ?)"
         values = [(url, order_type, order_id, order_data, order_detail, customer_id)]
-        self.write_data_to_db(query, values)
+        return self.write_data_to_db(query, values)
 
     def create_table_customers(self):
         cursor = self.create_connection().cursor()
@@ -105,16 +105,10 @@ class ParserDb(BaseDb):
         rows = self.get_all_from_db(query)
         return [self.formatted_order(row) for row in rows]
 
-    def update_send_on_success(self, order_id: str):
+    def update_send_on_success(self, order_id: str) -> bool:
         query = "UPDATE orders SET was_send=1 WHERE order_id=?"
-        self.write_data_to_db(query, [(order_id,)])
+        return self.write_data_to_db(query, [(order_id,)])
 
     @staticmethod
     def get_created_at_date(created_at: str, date_format: str = "%Y-%m-%d %H:%M:%S") -> datetime:
         return datetime.datetime.strptime(created_at, date_format)
-
-# test = ParserDb(db_name="test.db")
-# test.create_table_orders()
-# test.add_order("", "", "")
-# test.update_send_on_success("1fdfdfd23")
-# print(test.get_order_by_order_id("121231123"))

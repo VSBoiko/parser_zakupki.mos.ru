@@ -15,10 +15,10 @@ class BaseDb:
             with connection:
                 connection.executemany(query, data)
         except sqlite3.IntegrityError as err:
-            print('Возникла ошибка: ', err)
+            # print('Возникла ошибка: ', err)
             return False
         else:
-            print('Запись данных прошла успешно')
+            # print('Запись данных прошла успешно')
             return True
 
     def get_all_from_db(self, query) -> list:

@@ -32,8 +32,7 @@ class BaseParser:
         self._set_headers(headers)
 
         log_filename = "errors.log"
-        log_format = f"%(asctime)s - [%(levelname)s] - %(name)s - " \
-                     f"(%(filename)s).%(funcName)s(%(lineno)d) - %(message)s"
+        log_format = f"%(asctime)s - [%(levelname)s] ::: %(message)s"
         self._set_logger(log_filename, log_format)
 
     def add_logger_error(self, content):
@@ -71,20 +70,22 @@ class BaseParser:
 
             send_to_api(data)
 
-    def _send_orders(self, orders: list) -> bool:
+    def _send_orders(self, orders: list, is_logging: bool = False) -> bool:
         data = {
             'name': self._get_parser_name(),
             'data': orders
         }
         try:
             self._send_to_api(data)
-            self.add_logger_info(f"Sent {len(orders)} orders to API")
-            print(f"[SEND ORDERS] - {len(orders)} orders")
+            if is_logging:
+                self.add_logger_info(f"Успешно отправлено {len(orders)} заказов по API")
+                print(f"Успешно отправлено {len(orders)} заказов по API")
             return True
         except Exception as err:
-            self.add_logger_error("Error while sending orders")
-            self.add_logger_error(err)
-            print(f"[SEND ORDERS ERROR] - {len(orders)} orders")
+            if is_logging:
+                self.add_logger_error("Ошибка при отправке заказа по API")
+                self.add_logger_error(err)
+                print(f"Ошибка при отправке заказа по API")
             return False
 
     def _set_headers(self, new_headers: dict):
