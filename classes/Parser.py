@@ -12,70 +12,6 @@ class Parser(BaseParser):
     __need_type = "need"
     __tender_type = "tender"
 
-    def create_data_file(self, url: str, json_filepath: str) -> bool:
-        try:
-            response = requests.get(
-                url,
-                headers=self._get_headers()
-            )
-        except requests.exceptions.RequestException as err:
-            print("[ERROR] Ошибка при запросе на получении списка заказов с сайта zakupki.mos")
-            self.add_logger_error("Ошибка при запросе на получении списка заказов с сайта zakupki.mos")
-            self.add_logger_error(err.response.content)
-            return False
-
-        self._to_sleep()
-
-        self.write_json_file(json_filepath, response.json())
-        print(f"[FILE CREATED] Файл {json_filepath} со списком заказов успешно создан")
-        self.add_logger_info(f"Файл {json_filepath} со списком заказов успешно создан")
-
-        return True
-
-    @staticmethod
-    def _get_customer_api_url(customer_id: str) -> str:
-        return f"https://zakupki.mos.ru/newapi/api/CompanyProfile/" \
-               f"GetByCompanyId?companyId={customer_id}"
-
-    @staticmethod
-    def _get_customer_url(customer_id: str) -> str:
-        return f"https://zakupki.mos.ru/companyProfile/customer/{customer_id}"
-
-    def get_item_type(self, item: dict) -> str:
-        if item.get("auctionId"):
-            return self.__auction_type
-        elif item.get("needId"):
-            return self.__need_type
-        elif item.get("tenderId"):
-            return self.__tender_type
-
-    def get_item_id(self, item_type: str, item: dict) -> str:
-        if item_type == self.__auction_type:
-            return str(item['auctionId'])
-        elif item_type == self.__need_type:
-            return str(item['needId'])
-        elif item_type == self.__tender_type:
-            return str(item['tenderId'])
-
-    def get_item_url(self, item_type: str, item_id: str) -> str:
-        if item_type == self.__auction_type:
-            return f"https://zakupki.mos.ru/auction/{item_id}"
-        elif item_type == self.__need_type:
-            return f"https://zakupki.mos.ru/need/{item_id}"
-        elif item_type == self.__tender_type:
-            return f"https://old.zakupki.mos.ru/#/tenders/{item_id}"
-
-    def get_item_api_url(self, item_type: str, item_id: str) -> str:
-        if item_type == self.__auction_type:
-            return f"https://zakupki.mos.ru/newapi/api/" \
-                   f"{item_type.capitalize()}/Get?{item_type}Id={item_id}"
-        elif item_type == self.__need_type:
-            return f"https://zakupki.mos.ru/newapi/api/" \
-                   f"{item_type.capitalize()}/Get?{item_type}Id={item_id}"
-        elif item_type == self.__tender_type:
-            return f"https://old.zakupki.mos.ru/api/Cssp/" \
-                   f"{item_type.capitalize()}/GetEntity?id={item_id}"
-
     def add_customer_to_db(self, db: ParserDb, customer_id: str) -> bool:
         db_customer = db.get_customer_by_customer_id(customer_id)
         if db_customer:
@@ -100,6 +36,26 @@ class Parser(BaseParser):
                 print(f"[SUCCESS] Заказчик {customer_id} успешно добавлен в БД")
                 self.add_logger_info(f"Заказчик {customer_id} успешно добавлен в БД")
                 return True
+
+    def add_data_to_db(self, json_filepath: str, db: ParserDb):
+        data = self.read_json_file(json_filepath)
+        count_all_item = data["count"]
+        count = 0
+        print("[START] Начало добавления заказов в БД")
+        for item in data["items"][0:10]:
+            count += 1
+            iter_info = f"#{count} / {count_all_item}"
+            print(f"{iter_info}: [ORDER] Заказ ({item.get('number')}) {item.get('name')}")
+            # self.add_logger_info(f"Заказ ({item.get('number')}) {item.get('name')}")
+
+            customer_id = item.get('customers')[0].get('id')
+            self.add_customer_to_db(db, customer_id)
+
+            item_type = self.get_item_type(item)
+            item_id = self.get_item_id(item_type, item)
+            if self.check_order(item):
+                self.add_order_to_db(db, item_type, item_id, item, customer_id)
+        print("[FINISH] Конец добавления заказов в БД\n")
 
     def add_order_to_db(self, db: ParserDb, order_type: str, order_id: str,
                         order_data: dict, customer_id: str) -> bool:
@@ -130,26 +86,6 @@ class Parser(BaseParser):
                 self.add_logger_info(f"Заказ {order_id} успешно добавлен в БД")
                 return True
 
-    def add_data_to_db(self, json_filepath: str, db: ParserDb):
-        data = self.read_json_file(json_filepath)
-        count_all_item = data["count"]
-        count = 0
-        print("[START] Начало добавления заказов в БД")
-        for item in data["items"][0:10]:
-            count += 1
-            iter_info = f"#{count} / {count_all_item}"
-            print(f"{iter_info}: [ORDER] Заказ ({item.get('number')}) {item.get('name')}")
-            # self.add_logger_info(f"Заказ ({item.get('number')}) {item.get('name')}")
-
-            customer_id = item.get('customers')[0].get('id')
-            self.add_customer_to_db(db, customer_id)
-
-            item_type = self.get_item_type(item)
-            item_id = self.get_item_id(item_type, item)
-            if self.check_order(item):
-                self.add_order_to_db(db, item_type, item_id, item, customer_id)
-        print("[FINISH] Конец добавления заказов в БД\n")
-
     def check_order(self, order):
         dont_send = [
             "4122001"  # test order
@@ -164,59 +100,25 @@ class Parser(BaseParser):
 
         return True
 
-    def send_orders_from_db(self, db: ParserDb):
-        orders = db.get_unsent_orders()
-        count_all_orders = len(orders)
-        count, count_send, count_send_error = 0, 0, 0
-        print("[START] Начало отправки заказов по API")
+    def create_data_file(self, url: str, json_filepath: str) -> bool:
+        try:
+            response = requests.get(
+                url,
+                headers=self._get_headers()
+            )
+        except requests.exceptions.RequestException as err:
+            print("[ERROR] Ошибка при запросе на получении списка заказов с сайта zakupki.mos")
+            self.add_logger_error("Ошибка при запросе на получении списка заказов с сайта zakupki.mos")
+            self.add_logger_error(err.response.content)
+            return False
 
-        if count_all_orders == 0:
-            print("[INFO] Новых заказов нет")
-            self.add_logger_info("Новых заказов нет")
+        self._to_sleep()
 
-        for order in orders:
-            count += 1
-            iter_info = f"#{count} / {count_all_orders}"
+        self.write_json_file(json_filepath, response.json())
+        print(f"[FILE CREATED] Файл {json_filepath} со списком заказов успешно создан")
+        self.add_logger_info(f"Файл {json_filepath} со списком заказов успешно создан")
 
-            order_data = json.loads(order.get("order_data"))
-            print(f"{iter_info}: [ORDER] Заказ ({order_data.get('number')}) {order_data.get('name')}")
-
-            order_type = order.get("order_type")
-            customer = db.get_customer_by_customer_id(order.get("customer_id"))
-            formatted_order = {}
-            try:
-                if order_type == self.__auction_type:
-                    formatted_order = self.formatted_order_auction(order, customer)
-                elif order_type == self.__need_type:
-                    formatted_order = self.formatted_order_need(order, customer)
-                elif order_type == self.__tender_type:
-                    # order = self.formatted_order_tender(order_data, order_detail, order_url, customer)
-                    formatted_order = {}
-            except Exception as err:
-                print(f"[ERROR] Ошибка при создании заказа для отправки по API: {order.get('url')}")
-                self.add_logger_error(f"Ошибка при создании заказа для отправки по API: {order.get('url')}")
-                self.add_logger_error(err)
-            if formatted_order:
-                if self._send_orders([formatted_order]):
-                    db.update_send_on_success(order.get("order_id"))
-                    print(f"[SUCCESS] Заказ успешно отправлен по API: {order.get('url')}")
-                    self.add_logger_info(f"Заказ успешно отправлен по API: {order.get('url')}")
-                    count_send += 1
-                else:
-                    print(f"[ERROR] Заказ не отправлен по API: {order.get('url')}")
-                    self.add_logger_error(f"Заказ не отправлен по API: {order.get('url')}")
-                    count_send_error += 1
-            else:
-                print(f"[EMPTY ORDER] Заказ пустой: {order.get('url')}")
-                self.add_logger_info(f"Заказ пустой: {order.get('url')}")
-                count_send_error += 1
-
-        print("[FINISH] Конец отправки заказов по API\n")
-
-        return {
-            "new_orders": count_send,
-            "errors": count_send_error,
-        }
+        return True
 
     def formatted_order_need(self, order, customer) -> dict:
         order_data = json.loads(order.get("order_data"))
@@ -377,6 +279,95 @@ class Parser(BaseParser):
 
         return response.json()
 
+    def get_item_api_url(self, item_type: str, item_id: str) -> str:
+        if item_type == self.__auction_type:
+            return f"https://zakupki.mos.ru/newapi/api/" \
+                   f"{item_type.capitalize()}/Get?{item_type}Id={item_id}"
+        elif item_type == self.__need_type:
+            return f"https://zakupki.mos.ru/newapi/api/" \
+                   f"{item_type.capitalize()}/Get?{item_type}Id={item_id}"
+        elif item_type == self.__tender_type:
+            return f"https://old.zakupki.mos.ru/api/Cssp/" \
+                   f"{item_type.capitalize()}/GetEntity?id={item_id}"
+
+    def get_item_id(self, item_type: str, item: dict) -> str:
+        if item_type == self.__auction_type:
+            return str(item['auctionId'])
+        elif item_type == self.__need_type:
+            return str(item['needId'])
+        elif item_type == self.__tender_type:
+            return str(item['tenderId'])
+
+    def get_item_type(self, item: dict) -> str:
+        if item.get("auctionId"):
+            return self.__auction_type
+        elif item.get("needId"):
+            return self.__need_type
+        elif item.get("tenderId"):
+            return self.__tender_type
+
+    def get_item_url(self, item_type: str, item_id: str) -> str:
+        if item_type == self.__auction_type:
+            return f"https://zakupki.mos.ru/auction/{item_id}"
+        elif item_type == self.__need_type:
+            return f"https://zakupki.mos.ru/need/{item_id}"
+        elif item_type == self.__tender_type:
+            return f"https://old.zakupki.mos.ru/#/tenders/{item_id}"
+
+    def send_orders_from_db(self, db: ParserDb):
+        orders = db.get_unsent_orders()
+        count_all_orders = len(orders)
+        count, count_send, count_send_error = 0, 0, 0
+        print("[START] Начало отправки заказов по API")
+
+        if count_all_orders == 0:
+            print("[INFO] Новых заказов нет")
+            self.add_logger_info("Новых заказов нет")
+
+        for order in orders:
+            count += 1
+            iter_info = f"#{count} / {count_all_orders}"
+
+            order_data = json.loads(order.get("order_data"))
+            print(f"{iter_info}: [ORDER] Заказ ({order_data.get('number')}) {order_data.get('name')}")
+
+            order_type = order.get("order_type")
+            customer = db.get_customer_by_customer_id(order.get("customer_id"))
+            formatted_order = {}
+            try:
+                if order_type == self.__auction_type:
+                    formatted_order = self.formatted_order_auction(order, customer)
+                elif order_type == self.__need_type:
+                    formatted_order = self.formatted_order_need(order, customer)
+                elif order_type == self.__tender_type:
+                    # order = self.formatted_order_tender(order_data, order_detail, order_url, customer)
+                    formatted_order = {}
+            except Exception as err:
+                print(f"[ERROR] Ошибка при создании заказа для отправки по API: {order.get('url')}")
+                self.add_logger_error(f"Ошибка при создании заказа для отправки по API: {order.get('url')}")
+                self.add_logger_error(err)
+            if formatted_order:
+                if self._send_orders([formatted_order]):
+                    db.update_send_on_success(order.get("order_id"))
+                    print(f"[SUCCESS] Заказ успешно отправлен по API: {order.get('url')}")
+                    self.add_logger_info(f"Заказ успешно отправлен по API: {order.get('url')}")
+                    count_send += 1
+                else:
+                    print(f"[ERROR] Заказ не отправлен по API: {order.get('url')}")
+                    self.add_logger_error(f"Заказ не отправлен по API: {order.get('url')}")
+                    count_send_error += 1
+            else:
+                print(f"[EMPTY ORDER] Заказ пустой: {order.get('url')}")
+                self.add_logger_info(f"Заказ пустой: {order.get('url')}")
+                count_send_error += 1
+
+        print("[FINISH] Конец отправки заказов по API\n")
+
+        return {
+            "new_orders": count_send,
+            "errors": count_send_error,
+        }
+
     def start(self):
         time_start = datetime.datetime.now()
         print(f"[PARSER] Парсер начал работу в {time_start.strftime('%d.%m.%Y, %H:%M:%S')}")
@@ -415,6 +406,15 @@ class Parser(BaseParser):
         self.add_logger_info(f"Парсер закончил работу. "
                              f"{result.get('new_orders')} новых заказов отправлено. "
                              f"{result.get('errors')} заказов с ошибкой.")
+
+    @staticmethod
+    def _get_customer_api_url(customer_id: str) -> str:
+        return f"https://zakupki.mos.ru/newapi/api/CompanyProfile/" \
+               f"GetByCompanyId?companyId={customer_id}"
+
+    @staticmethod
+    def _get_customer_url(customer_id: str) -> str:
+        return f"https://zakupki.mos.ru/companyProfile/customer/{customer_id}"
 
     @staticmethod
     def _get_document_url(document_id: str) -> str:
