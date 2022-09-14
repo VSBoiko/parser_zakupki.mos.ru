@@ -16,7 +16,7 @@ class ParserDb(BaseDb):
         query = "INSERT INTO " \
                 "orders(url, order_type, order_id, order_data, order_detail, " \
                 "customer_id) " \
-                "VALUES (?, ?, ?, ?, ?)"
+                "VALUES (?, ?, ?, ?, ?, ?)"
         values = [(url, order_type, order_id, order_data, order_detail, customer_id)]
         self.write_data_to_db(query, values)
 
@@ -28,9 +28,8 @@ class ParserDb(BaseDb):
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 url TEXT DEFAULT "", 
                 customer_id TEXT DEFAULT "", 
-                customer_data TEXT DEFAULT "", 
-            )
-        """)
+                customer_data TEXT DEFAULT ""
+            )""")
 
     def create_table_orders(self):
         cursor = self.create_connection().cursor()
@@ -42,7 +41,7 @@ class ParserDb(BaseDb):
                 order_type TEXT DEFAULT "", 
                 order_id TEXT DEFAULT "", 
                 order_data TEXT DEFAULT "", 
-                order_data_detail TEXT DEFAULT "", 
+                order_detail TEXT DEFAULT "", 
                 customer_id TEXT DEFAULT "", 
                 was_send BOOLEAN DEFAULT 0
             )
@@ -91,7 +90,7 @@ class ParserDb(BaseDb):
             return customers.pop()
         else:
             return {}
-    
+
     def get_order_by_order_id(self, order_id: str) -> dict:
         query = f"SELECT * FROM orders WHERE order_id={order_id}"
         rows = self.get_all_from_db(query)
@@ -105,18 +104,17 @@ class ParserDb(BaseDb):
         query = "SELECT * FROM orders WHERE was_send = 0"
         rows = self.get_all_from_db(query)
         return [self.formatted_order(row) for row in rows]
-    
+
     def update_send_on_success(self, order_id: str):
         query = "UPDATE orders SET was_send=1 WHERE order_id=?"
-        self.write_data_to_db(query, [(order_id, )])
+        self.write_data_to_db(query, [(order_id,)])
 
     @staticmethod
     def get_created_at_date(created_at: str, date_format: str = "%Y-%m-%d %H:%M:%S") -> datetime:
         return datetime.datetime.strptime(created_at, date_format)
 
-
-test = ParserDb(db_name="test.db")
+# test = ParserDb(db_name="test.db")
 # test.create_table_orders()
 # test.add_order("", "", "")
 # test.update_send_on_success("1fdfdfd23")
-print(test.get_order_by_order_id("121231123"))
+# print(test.get_order_by_order_id("121231123"))

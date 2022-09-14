@@ -122,7 +122,7 @@ class Parser(BaseParser):
         data = self.read_json_file(json_filepath)
         count_all_item = data["count"]
         count = 0
-        for item in data["items"]:
+        for item in data["items"][0:10]:
             count += 1
             iter_info = f"#{count} / {count_all_item}"
             print(f"{iter_info}: [START] - {item.get('name')} ({item.get('number')})")
@@ -157,32 +157,32 @@ class Parser(BaseParser):
             count += 1
             iter_info = f"#{count} / {count_all_orders}"
 
-            order_data = order["order_data"]
+            order_data = json.loads(order.get("order_data"))
             print(f"{iter_info}: [START] - {order_data.get('name')} ({order_data.get('number')})")
 
-            order_type = order["order_type"]
-            customer = db.get_customer_by_customer_id(order["customer_id"])
-            order = {}
+            order_type = order.get("order_type")
+            customer = db.get_customer_by_customer_id(order.get("customer_id"))
+            formatted_order = {}
             try:
                 if order_type == self.__auction_type:
-                    order = self.formatted_order_auction(order, customer)
+                    formatted_order = self.formatted_order_auction(order, customer)
                 elif order_type == self.__need_type:
-                    order = self.formatted_order_need(order, customer)
+                    formatted_order = self.formatted_order_need(order, customer)
                 elif order_type == self.__tender_type:
                     # order = self.formatted_order_tender(order_data, order_detail, order_url, customer)
-                    order = {}
+                    formatted_order = {}
             except Exception as err:
-                self.add_logger_error(f"Error creating order to send: {order['url']}")
+                self.add_logger_error(f"Error creating order to send: {order.get('url')}")
                 self.add_logger_error(err)
-
-            if order:
-                if self._send_orders([order]):
-                    db.update_send_on_success(order["order_id"])
+            if formatted_order:
+                if self._send_orders([formatted_order]):
+                    db.update_send_on_success(order.get("order_id"))
                     count_send += 1
                 else:
                     count_send_error += 1
             else:
-                print(f"{iter_info}: [ORDER IS EMPTY] - ({order_data.get('number')}) {order_data.get('name')} ")
+                print(f"{iter_info}: {order_type} [ORDER IS EMPTY] - "
+                      f"({order_data.get('number')}) {order_data.get('name')} ")
                 count_send_error += 1
 
         return {
@@ -190,10 +190,12 @@ class Parser(BaseParser):
             "errors": count_send_error,
         }
 
-    def formatted_order_need(self, order, customer):
-        order_data = order["order_data"]
-        order_detail = order["order_detail"]
-        order_url = order["order_url"]
+    def formatted_order_need(self, order, customer) -> dict:
+        order_data = json.loads(order.get("order_data"))
+        order_detail = json.loads(order.get("order_detail"))
+        order_url = order.get("url")
+
+        customer_detail = json.loads(customer.get("customer_data"))
         result = {
             "fz": "ЗМО",
             "purchaseNumber": order_data.get("number"),
@@ -222,20 +224,20 @@ class Parser(BaseParser):
         }
 
         # customer
-        if customer.get("company").get("factAddress"):
+        if customer_detail.get("company").get("factAddress"):
             if "customer" not in result:
                 result.update({"customer": {}})
-            result["customer"].update({"factAddress": customer.get("company").get("factAddress")})
+            result["customer"].update({"factAddress": customer_detail.get("company").get("factAddress")})
 
-        if customer.get("company").get("inn"):
+        if customer_detail.get("company").get("inn"):
             if "customer" not in result:
                 result.update({"customer": {}})
-            result["customer"].update({"inn": customer.get("company").get("inn")})
+            result["customer"].update({"inn": customer_detail.get("company").get("inn")})
 
-        if customer.get("company").get("kpp"):
+        if customer_detail.get("company").get("kpp"):
             if "customer" not in result:
                 result.update({"customer": {}})
-            result["customer"].update({"kpp": customer.get("company").get("kpp")})
+            result["customer"].update({"kpp": customer_detail.get("company").get("kpp")})
 
         # contactPerson
         contact_name = order_detail.get("contactPerson").split() if order_detail.get("contactPerson") else ["", ""]
@@ -265,9 +267,9 @@ class Parser(BaseParser):
         return result
 
     def formatted_order_auction(self, order, customer) -> dict:
-        order_data = order["order_data"]
-        order_detail = order["order_detail"]
-        order_url = order["order_url"]
+        order_data = json.loads(order["order_data"])
+        order_detail = json.loads(order["order_detail"])
+        order_url = order.get("url")
         deliveries = order_detail.get("deliveries")[0]
 
         result = {
@@ -369,6 +371,8 @@ class Parser(BaseParser):
             self.create_data_file(mos_url, data_filepath)
 
             db = ParserDb("zakupkimos.db")
+            db.create_table_orders()
+            db.create_table_customers()
             self.add_data_to_db(data_filepath, db)
             result = self.send_orders_from_db(db)
             os.remove(f"{data_filepath}")
