@@ -12,7 +12,59 @@ class Parser(BaseParser):
     __need_type = "need"
     __tender_type = "tender"
 
-    def add_customer_to_db(self, db: ParserDb, customer_id: str) -> bool:
+    def start(self):
+        time_start = datetime.datetime.now()
+        print(f"[PARSER] Парсер начал работу в {time_start.strftime('%d.%m.%Y, %H:%M:%S')}")
+
+        self.add_logger_info("Парсер начал работу")
+
+        result = {
+            "new_orders": -1,
+            "errors": -1
+        }
+
+        mos_url = "https://old.zakupki.mos.ru/api/Cssp/Purchase/Query?queryDto=%7B%22filter%22%3A%7B%22auctionSpecificFilter%22%3A%7B%22stateIdIn%22%3A%5B19000002%5D%7D%2C%22needSpecificFilter%22%3A%7B%22stateIdIn%22%3A%5B20000002%5D%7D%2C%22tenderSpecificFilter%22%3A%7B%22stateIdIn%22%3A%5B5%5D%7D%7D%2C%22order%22%3A%5B%7B%22field%22%3A%22relevance%22%2C%22desc%22%3Atrue%7D%5D%2C%22withCount%22%3Atrue%2C%22skip%22%3A0%7D"
+        data_filepath = "./data.json"
+        if os.path.exists(data_filepath):
+            print(f"[ERROR] Файл {data_filepath} существует, новые заказы не могут быть загруженыt")
+            self.add_logger_error(f"Файл {data_filepath} существует, новые заказы не могут быть загружены")
+            # os.remove(f"{data_filepath}")
+            # logger.info(f"{data_filepath} deleted")
+        else:
+            self.__create_data_file(mos_url, data_filepath)
+
+            db = ParserDb("zakupkimos.db")
+            db.create_table_orders()
+            db.create_table_customers()
+            self.__add_data_to_db(data_filepath, db)
+            result = self.__send_orders_from_db(db)
+            os.remove(f"{data_filepath}")
+            print(f"[INFO] Файл {data_filepath} успешно удален")
+            self.add_logger_info(f"Файл {data_filepath} успешно удален")
+
+        time_finish = datetime.datetime.now()
+        print(f"[PARSER] Парсер закончил работу в {time_finish.strftime('%d.%m.%Y, %H:%M:%S')}. "
+              f"{result.get('new_orders')} новых заказов отправлено. "
+              f"{result.get('errors')} заказов с ошибкой.")
+
+        self.add_logger_info(f"Парсер закончил работу. "
+                             f"{result.get('new_orders')} новых заказов отправлено. "
+                             f"{result.get('errors')} заказов с ошибкой.")
+
+    @staticmethod
+    def _get_customer_api_url(customer_id: str) -> str:
+        return f"https://zakupki.mos.ru/newapi/api/CompanyProfile/" \
+               f"GetByCompanyId?companyId={customer_id}"
+
+    @staticmethod
+    def _get_customer_url(customer_id: str) -> str:
+        return f"https://zakupki.mos.ru/companyProfile/customer/{customer_id}"
+
+    @staticmethod
+    def _get_document_url(document_id: str) -> str:
+        return f"https://zakupki.mos.ru/newapi/api/FileStorage/Download?id={document_id}"
+
+    def __add_customer_to_db(self, db: ParserDb, customer_id: str) -> bool:
         db_customer = db.get_customer_by_customer_id(customer_id)
         if db_customer:
             # print(f"[ALREADY EXIST] Заказчик уже существует в БД - ({customer_id})")
@@ -21,7 +73,7 @@ class Parser(BaseParser):
         else:
             customer_url = self._get_customer_url(customer_id)
             customer_api_url = self._get_customer_api_url(customer_id)
-            customer = self.get_customer(customer_api_url)
+            customer = self.__get_customer(customer_api_url)
 
             if customer == {} or customer.get("httpStatusCode") == 404:
                 print(f"[ERROR] Ошибка при получении заказчика: {customer_url}")
@@ -37,7 +89,7 @@ class Parser(BaseParser):
                 self.add_logger_info(f"Заказчик {customer_id} успешно добавлен в БД")
                 return True
 
-    def add_data_to_db(self, json_filepath: str, db: ParserDb):
+    def __add_data_to_db(self, json_filepath: str, db: ParserDb):
         data = self.read_json_file(json_filepath)
         count_all_item = data["count"]
         count = 0
@@ -49,25 +101,25 @@ class Parser(BaseParser):
             # self.add_logger_info(f"Заказ ({item.get('number')}) {item.get('name')}")
 
             customer_id = item.get('customers')[0].get('id')
-            self.add_customer_to_db(db, customer_id)
+            self.__add_customer_to_db(db, customer_id)
 
-            item_type = self.get_item_type(item)
-            item_id = self.get_item_id(item_type, item)
-            if self.check_order(item):
-                self.add_order_to_db(db, item_type, item_id, item, customer_id)
+            item_type = self.__get_item_type(item)
+            item_id = self.__get_item_id(item_type, item)
+            if self.__check_order(item):
+                self.__add_order_to_db(db, item_type, item_id, item, customer_id)
         print("[FINISH] Конец добавления заказов в БД\n")
 
-    def add_order_to_db(self, db: ParserDb, order_type: str, order_id: str,
-                        order_data: dict, customer_id: str) -> bool:
+    def __add_order_to_db(self, db: ParserDb, order_type: str, order_id: str,
+                          order_data: dict, customer_id: str) -> bool:
         db_order = db.get_order_by_order_id(order_id)
         if db_order:
             # print(f"[ALREADY EXIST] Заказ уже существует в БД - ({order_id})")
             # self.add_logger_info(f"Заказ уже существует в БД - ({order_id})")
             return False
         else:
-            item_url = self.get_item_url(order_type, order_id)
-            item_api_url = self.get_item_api_url(order_type, order_id)
-            item_detail = self.get_item(item_api_url)
+            item_url = self.__get_item_url(order_type, order_id)
+            item_api_url = self.__get_item_api_url(order_type, order_id)
+            item_detail = self.__get_item(item_api_url)
 
             if item_detail == {} or item_detail.get("httpStatusCode") == 404:
                 print(f"[ERROR] Ошибка при получении детальной инф-ции о заказе: {item_url}")
@@ -86,7 +138,7 @@ class Parser(BaseParser):
                 self.add_logger_info(f"Заказ {order_id} успешно добавлен в БД")
                 return True
 
-    def check_order(self, order):
+    def __check_order(self, order):
         dont_send = [
             "4122001"  # test order
         ]
@@ -100,7 +152,7 @@ class Parser(BaseParser):
 
         return True
 
-    def create_data_file(self, url: str, json_filepath: str) -> bool:
+    def __create_data_file(self, url: str, json_filepath: str) -> bool:
         try:
             response = requests.get(
                 url,
@@ -120,7 +172,7 @@ class Parser(BaseParser):
 
         return True
 
-    def formatted_order_need(self, order, customer) -> dict:
+    def __formatted_order_need(self, order, customer) -> dict:
         order_data = json.loads(order.get("order_data"))
         order_detail = json.loads(order.get("order_detail"))
         order_url = order.get("url")
@@ -196,7 +248,7 @@ class Parser(BaseParser):
 
         return result
 
-    def formatted_order_auction(self, order, customer) -> dict:
+    def __formatted_order_auction(self, order, customer) -> dict:
         order_data = json.loads(order["order_data"])
         order_detail = json.loads(order["order_detail"])
         order_url = order.get("url")
@@ -246,10 +298,10 @@ class Parser(BaseParser):
 
         return result
 
-    def formatted_order_tender(self, item, detail, item_url, customer):
+    def __formatted_order_tender(self, item, detail, item_url, customer):
         pass
 
-    def get_customer(self, customer_url: str) -> dict:
+    def __get_customer(self, customer_url: str) -> dict:
         try:
             response = requests.get(
                 url=customer_url,
@@ -264,7 +316,7 @@ class Parser(BaseParser):
 
         return response.json()
 
-    def get_item(self, detail_url: str) -> dict:
+    def __get_item(self, detail_url: str) -> dict:
         try:
             response = requests.get(
                 url=detail_url,
@@ -279,7 +331,7 @@ class Parser(BaseParser):
 
         return response.json()
 
-    def get_item_api_url(self, item_type: str, item_id: str) -> str:
+    def __get_item_api_url(self, item_type: str, item_id: str) -> str:
         if item_type == self.__auction_type:
             return f"https://zakupki.mos.ru/newapi/api/" \
                    f"{item_type.capitalize()}/Get?{item_type}Id={item_id}"
@@ -290,7 +342,7 @@ class Parser(BaseParser):
             return f"https://old.zakupki.mos.ru/api/Cssp/" \
                    f"{item_type.capitalize()}/GetEntity?id={item_id}"
 
-    def get_item_id(self, item_type: str, item: dict) -> str:
+    def __get_item_id(self, item_type: str, item: dict) -> str:
         if item_type == self.__auction_type:
             return str(item['auctionId'])
         elif item_type == self.__need_type:
@@ -298,7 +350,7 @@ class Parser(BaseParser):
         elif item_type == self.__tender_type:
             return str(item['tenderId'])
 
-    def get_item_type(self, item: dict) -> str:
+    def __get_item_type(self, item: dict) -> str:
         if item.get("auctionId"):
             return self.__auction_type
         elif item.get("needId"):
@@ -306,7 +358,7 @@ class Parser(BaseParser):
         elif item.get("tenderId"):
             return self.__tender_type
 
-    def get_item_url(self, item_type: str, item_id: str) -> str:
+    def __get_item_url(self, item_type: str, item_id: str) -> str:
         if item_type == self.__auction_type:
             return f"https://zakupki.mos.ru/auction/{item_id}"
         elif item_type == self.__need_type:
@@ -314,7 +366,7 @@ class Parser(BaseParser):
         elif item_type == self.__tender_type:
             return f"https://old.zakupki.mos.ru/#/tenders/{item_id}"
 
-    def send_orders_from_db(self, db: ParserDb):
+    def __send_orders_from_db(self, db: ParserDb):
         orders = db.get_unsent_orders()
         count_all_orders = len(orders)
         count, count_send, count_send_error = 0, 0, 0
@@ -336,9 +388,9 @@ class Parser(BaseParser):
             formatted_order = {}
             try:
                 if order_type == self.__auction_type:
-                    formatted_order = self.formatted_order_auction(order, customer)
+                    formatted_order = self.__formatted_order_auction(order, customer)
                 elif order_type == self.__need_type:
-                    formatted_order = self.formatted_order_need(order, customer)
+                    formatted_order = self.__formatted_order_need(order, customer)
                 elif order_type == self.__tender_type:
                     # order = self.formatted_order_tender(order_data, order_detail, order_url, customer)
                     formatted_order = {}
@@ -367,55 +419,3 @@ class Parser(BaseParser):
             "new_orders": count_send,
             "errors": count_send_error,
         }
-
-    def start(self):
-        time_start = datetime.datetime.now()
-        print(f"[PARSER] Парсер начал работу в {time_start.strftime('%d.%m.%Y, %H:%M:%S')}")
-
-        self.add_logger_info("Парсер начал работу")
-
-        result = {
-            "new_orders": -1,
-            "errors": -1
-        }
-
-        mos_url = "https://old.zakupki.mos.ru/api/Cssp/Purchase/Query?queryDto=%7B%22filter%22%3A%7B%22auctionSpecificFilter%22%3A%7B%22stateIdIn%22%3A%5B19000002%5D%7D%2C%22needSpecificFilter%22%3A%7B%22stateIdIn%22%3A%5B20000002%5D%7D%2C%22tenderSpecificFilter%22%3A%7B%22stateIdIn%22%3A%5B5%5D%7D%7D%2C%22order%22%3A%5B%7B%22field%22%3A%22relevance%22%2C%22desc%22%3Atrue%7D%5D%2C%22withCount%22%3Atrue%2C%22skip%22%3A0%7D"
-        data_filepath = "./data.json"
-        if os.path.exists(data_filepath):
-            print(f"[ERROR] Файл {data_filepath} существует, новые заказы не могут быть загруженыt")
-            self.add_logger_error(f"Файл {data_filepath} существует, новые заказы не могут быть загружены")
-            # os.remove(f"{data_filepath}")
-            # logger.info(f"{data_filepath} deleted")
-        else:
-            self.create_data_file(mos_url, data_filepath)
-
-            db = ParserDb("zakupkimos.db")
-            db.create_table_orders()
-            db.create_table_customers()
-            self.add_data_to_db(data_filepath, db)
-            result = self.send_orders_from_db(db)
-            os.remove(f"{data_filepath}")
-            print(f"[INFO] Файл {data_filepath} успешно удален")
-            self.add_logger_info(f"Файл {data_filepath} успешно удален")
-
-        time_finish = datetime.datetime.now()
-        print(f"[PARSER] Парсер закончил работу в {time_finish.strftime('%d.%m.%Y, %H:%M:%S')}. "
-              f"{result.get('new_orders')} новых заказов отправлено. "
-              f"{result.get('errors')} заказов с ошибкой.")
-
-        self.add_logger_info(f"Парсер закончил работу. "
-                             f"{result.get('new_orders')} новых заказов отправлено. "
-                             f"{result.get('errors')} заказов с ошибкой.")
-
-    @staticmethod
-    def _get_customer_api_url(customer_id: str) -> str:
-        return f"https://zakupki.mos.ru/newapi/api/CompanyProfile/" \
-               f"GetByCompanyId?companyId={customer_id}"
-
-    @staticmethod
-    def _get_customer_url(customer_id: str) -> str:
-        return f"https://zakupki.mos.ru/companyProfile/customer/{customer_id}"
-
-    @staticmethod
-    def _get_document_url(document_id: str) -> str:
-        return f"https://zakupki.mos.ru/newapi/api/FileStorage/Download?id={document_id}"
