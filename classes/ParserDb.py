@@ -1,7 +1,7 @@
 import datetime
-from typing import List, Any
 
-from BaseDb import BaseDb
+
+from classes.BaseDb import BaseDb
 
 
 class ParserDb(BaseDb):
@@ -12,12 +12,13 @@ class ParserDb(BaseDb):
         return self.write_data_to_db(query, [(url, customer_id, customer_data)])
 
     def add_order(self, url: str, order_type: str, order_id: str,
-                  order_data: str, order_detail: str, customer_id: str) -> bool:
+                  order_data: str, order_detail: str, customer_id: str,
+                  was_send: int = 0) -> bool:
         query = "INSERT INTO " \
                 "orders(url, order_type, order_id, order_data, order_detail, " \
-                "customer_id) " \
-                "VALUES (?, ?, ?, ?, ?, ?)"
-        values = [(url, order_type, order_id, order_data, order_detail, customer_id)]
+                "customer_id, was_send) " \
+                "VALUES (?, ?, ?, ?, ?, ?, ?)"
+        values = [(url, order_type, order_id, order_data, order_detail, customer_id, was_send)]
         return self.write_data_to_db(query, values)
 
     def create_table_customers(self):
@@ -106,7 +107,7 @@ class ParserDb(BaseDb):
         return [self.formatted_order(row) for row in rows]
 
     def update_send_on_success(self, order_id: str) -> bool:
-        query = "UPDATE orders SET was_send=1 WHERE order_id=?"
+        query = "UPDATE orders SET was_send=1, order_data=NULL, order_detail=NULL WHERE order_id=?"
         return self.write_data_to_db(query, [(order_id,)])
 
     @staticmethod

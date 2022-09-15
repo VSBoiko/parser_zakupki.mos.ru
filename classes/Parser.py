@@ -1,10 +1,11 @@
 import datetime
 import json
 import os
+
 import requests
 
-from BaseParser import BaseParser
-from ParserDb import ParserDb
+from classes.BaseParser import BaseParser
+from classes.ParserDb import ParserDb
 
 
 class Parser(BaseParser):
@@ -52,6 +53,10 @@ class Parser(BaseParser):
                              f"{result.get('errors')} заказов с ошибкой.")
 
     @staticmethod
+    def _get_auction_lot_api_url(lot_id: str) -> str:
+        return f"https://zakupki.mos.ru/newapi/api/Auction/GetAuctionItemAdditionalInfo?itemId={lot_id}"
+
+    @staticmethod
     def _get_customer_api_url(customer_id: str) -> str:
         return f"https://zakupki.mos.ru/newapi/api/CompanyProfile/" \
                f"GetByCompanyId?companyId={customer_id}"
@@ -83,10 +88,10 @@ class Parser(BaseParser):
                 db.add_customer(
                     url=customer_url,
                     customer_id=customer_id,
-                    customer_data=json.dumps(customer)
+                    customer_data=json.dumps(customer, ensure_ascii=False)
                 )
                 print(f"[SUCCESS] Заказчик {customer_id} успешно добавлен в БД")
-                self.add_logger_info(f"Заказчик {customer_id} успешно добавлен в БД")
+                # self.add_logger_info(f"Заказчик {customer_id} успешно добавлен в БД")
                 return True
 
     def __add_data_to_db(self, json_filepath: str, db: ParserDb):
@@ -94,19 +99,21 @@ class Parser(BaseParser):
         count_all_item = data["count"]
         count = 0
         print("[START] Начало добавления заказов в БД")
-        for item in data["items"][0:10]:
+        for item in data["items"]:
             count += 1
             iter_info = f"#{count} / {count_all_item}"
             print(f"{iter_info}: [ORDER] Заказ ({item.get('number')}) {item.get('name')}")
             # self.add_logger_info(f"Заказ ({item.get('number')}) {item.get('name')}")
+
+            if not self.__check_order(item):
+                continue
 
             customer_id = item.get('customers')[0].get('id')
             self.__add_customer_to_db(db, customer_id)
 
             item_type = self.__get_item_type(item)
             item_id = self.__get_item_id(item_type, item)
-            if self.__check_order(item):
-                self.__add_order_to_db(db, item_type, item_id, item, customer_id)
+            self.__add_order_to_db(db, item_type, item_id, item, customer_id)
         print("[FINISH] Конец добавления заказов в БД\n")
 
     def __add_order_to_db(self, db: ParserDb, order_type: str, order_id: str,
@@ -121,7 +128,20 @@ class Parser(BaseParser):
             item_api_url = self.__get_item_api_url(order_type, order_id)
             item_detail = self.__get_item(item_api_url)
 
-            if item_detail == {} or item_detail.get("httpStatusCode") == 404:
+            if not self.__check_order_state(item_detail.get("state").get("id")):
+                print(f"[ERROR] Заказ имеет некорректный статус: {item_url}")
+                self.add_logger_error(f"Заказ имеет некорректный статус: {item_url}")
+                db.add_order(
+                    url=item_url,
+                    order_type=order_type,
+                    order_id=order_id,
+                    order_data="Заказ имеет некорректный статус",
+                    order_detail=f"Статус - {item_detail.get('state').get('name')}",
+                    customer_id=customer_id,
+                    was_send=1
+                )
+                return False
+            elif item_detail == {} or item_detail.get("httpStatusCode") == 404:
                 print(f"[ERROR] Ошибка при получении детальной инф-ции о заказе: {item_url}")
                 self.add_logger_error(f"Ошибка при получении детальной инф-ции о заказе: {item_url}")
                 return False
@@ -130,15 +150,15 @@ class Parser(BaseParser):
                     url=item_url,
                     order_type=order_type,
                     order_id=order_id,
-                    order_data=json.dumps(order_data),
-                    order_detail=json.dumps(item_detail),
+                    order_data=json.dumps(order_data, ensure_ascii=False),
+                    order_detail=json.dumps(item_detail, ensure_ascii=False),
                     customer_id=customer_id
                 )
                 print(f"[SUCCESS] Заказ {order_id} успешно добавлен в БД")
-                self.add_logger_info(f"Заказ {order_id} успешно добавлен в БД")
+                # self.add_logger_info(f"Заказ {order_id} успешно добавлен в БД")
                 return True
 
-    def __check_order(self, order):
+    def __check_order(self, order) -> bool:
         dont_send = [
             "4122001"  # test order
         ]
@@ -151,6 +171,17 @@ class Parser(BaseParser):
             return False
 
         return True
+
+    def __check_order_state(self, state_id: int) -> bool:
+        current_state_ids = [
+            20000002,
+            19000002
+        ]
+
+        if state_id in current_state_ids:
+            return True
+        else:
+            return False
 
     def __create_data_file(self, url: str, json_filepath: str) -> bool:
         try:
@@ -246,12 +277,18 @@ class Parser(BaseParser):
                 result.update({"contactPerson": {}})
             result["contactPerson"].update({"contactPhone": order_detail.get("contactPhone")})
 
+        okpd_codes = [{"code": item.get("okpd").get("code")} for item in order_detail.get("items")]
+        if okpd_codes:
+            result.get("lots")[0].update({"lotItems": okpd_codes})
+
         return result
 
     def __formatted_order_auction(self, order, customer) -> dict:
         order_data = json.loads(order["order_data"])
         order_detail = json.loads(order["order_detail"])
         order_url = order.get("url")
+        customer_data = json.loads(customer.get("customer_data"))
+
         deliveries = order_detail.get("deliveries")[0]
 
         result = {
@@ -281,25 +318,47 @@ class Parser(BaseParser):
         }
 
         # customer
-        if customer.get("company").get("factAddress"):
+        if customer_data.get("company").get("factAddress"):
             if "customer" not in result:
                 result.update({"customer": {}})
-            result["customer"].update({"factAddress": customer.get("company").get("factAddress")})
+            result["customer"].update({"factAddress": customer_data.get("company").get("factAddress")})
 
-        if customer.get("company").get("inn"):
+        if customer_data.get("company").get("inn"):
             if "customer" not in result:
                 result.update({"customer": {}})
-            result["customer"].update({"inn": customer.get("company").get("inn")})
+            result["customer"].update({"inn": customer_data.get("company").get("inn")})
 
-        if customer.get("company").get("kpp"):
+        if customer_data.get("company").get("kpp"):
             if "customer" not in result:
                 result.update({"customer": {}})
-            result["customer"].update({"kpp": customer.get("company").get("kpp")})
+            result["customer"].update({"kpp": customer_data.get("company").get("kpp")})
+
+        lots = [self.__get_auction_lot(item.get("id"))
+                for item in order_detail.get("items")]
+        okpd_codes = [{"code": lot.get("okpd").get("code")} for lot in lots]
+        if okpd_codes:
+            result.get("lots")[0].update({"lotItems": okpd_codes})
 
         return result
 
     def __formatted_order_tender(self, item, detail, item_url, customer):
         pass
+
+    def __get_auction_lot(self, lot_id: str):
+        url = self._get_auction_lot_api_url(lot_id)
+        try:
+            response = requests.get(
+                url=url,
+                headers=self._get_headers()
+            )
+        except requests.exceptions.RequestException as err:
+            self.add_logger_error("Ошибка при отправке запроса на получение инф-ции о лоте аукциона")
+            self.add_logger_error(err.response.content)
+            return {}
+
+        self._to_sleep()
+
+        return response.json()
 
     def __get_customer(self, customer_url: str) -> dict:
         try:
@@ -375,17 +434,24 @@ class Parser(BaseParser):
         if count_all_orders == 0:
             print("[INFO] Новых заказов нет")
             self.add_logger_info("Новых заказов нет")
-
         for order in orders:
             count += 1
             iter_info = f"#{count} / {count_all_orders}"
 
             order_data = json.loads(order.get("order_data"))
-            print(f"{iter_info}: [ORDER] Заказ ({order_data.get('number')}) {order_data.get('name')}")
+            # print(f"{iter_info}: [ORDER] Заказ ({order_data.get('number')}) {order_data.get('name')}")
 
             order_type = order.get("order_type")
             customer = db.get_customer_by_customer_id(order.get("customer_id"))
             formatted_order = {}
+
+            if not customer:
+                print(f"[ERROR] По заказу {order.get('order_id')} в БД "
+                      f"нет информации о заказчике {order.get('customer_id')}")
+                self.add_logger_error(f"По заказу {order.get('order_id')} в БД "
+                                      f"нет информации о заказчике {order.get('customer_id')}")
+                continue
+
             try:
                 if order_type == self.__auction_type:
                     formatted_order = self.__formatted_order_auction(order, customer)
